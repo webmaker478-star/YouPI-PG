@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import http from 'node:http'; // <--- Render port binding ke liye add kiya gaya hai
+import http from 'node:http';
 import { runMigrations } from '../packages/db/src/migrate.js';
 import { startControlCenter } from '../apps/control-center/src/index.js';
 import { resolveRuntimeUrls } from '../packages/common/src/runtime-config.js';
@@ -24,18 +24,32 @@ try {
 process.env.YOUPI_MODE = 'production';
 process.env.NODE_ENV = 'production';
 
-
 console.log('====================================================');
 console.log('🚀 Starting YOUPI PG V2 — Production Gateway');
 console.log('====================================================');
 
-// 1. Run database migrations & load persisted configuration (Part B3: never overwrite settings)
+// =========================================================================
+// ⚡ EARLY RENDER PORT BINDING FIX: Bind to 0.0.0.0:[PORT] immediately so 
+// Render's port scanner detects an open port right away!
+// =========================================================================
+const RENDER_PORT = process.env.PORT || 10000;
+const renderServer = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('YOUPI PG V2 Production Gateway is Alive & Running!\n');
+});
+
+renderServer.listen(Number(RENDER_PORT), '0.0.0.0', () => {
+  console.log(`[✓] Render Port Binding active and listening on 0.0.0.0:${RENDER_PORT}`);
+});
+// =========================================================================
+
+// 1. Run database migrations & load persisted configuration
 console.log('[1/3] Loading persisted production database & settings...');
 const migrationResult = runMigrations();
 const merchant = migrationResult.defaultMerchant;
 const branding = merchant?.branding || {};
 
-// 2. Validate Production Configuration (Part B2 & Part I)
+// 2. Validate Production Configuration
 const domain = (branding.cloudflareDomain || branding.domainTld || process.env.CLOUDFLARE_DOMAIN || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/+$/, '');
 const prefix = (branding.deploymentPrefix || branding.domainPrefix || process.env.DEPLOYMENT_PREFIX || 'pay').trim().toLowerCase().replace(/[^a-z0-9-_]/g, '') || 'pay';
 
@@ -46,9 +60,6 @@ if (!domain) {
   console.error('Cloudflare Domain is required when running in PRODUCTION mode.');
   console.error('Please configure your Cloudflare Domain in the Merchant Admin panel,');
   console.error('or set CLOUDFLARE_DOMAIN in .env before running `npm start`.');
-  console.error('');
-  console.error('YOUPI PG V2 adheres to authoritative production mode and will NOT');
-  console.error('silently rewrite or fall back to localhost in production.');
   console.error('================================================================\n');
   process.exit(1);
 }
@@ -82,20 +93,6 @@ const cc = await startControlCenter(8090);
 
 console.log('[3/3] Starting core production gateway services (Pure API & Android Observer)...\n');
 await cc.processManager.startAll();
-
-// -------------------------------------------------------------------------
-// RENDER PORT BINDING FIX: Render requires an open port on 0.0.0.0:[PORT]
-// -------------------------------------------------------------------------
-const RENDER_PORT = process.env.PORT || 10000;
-const renderServer = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('YOUPI PG V2 Production Gateway is Alive & Running!\n');
-});
-
-renderServer.listen(RENDER_PORT, '0.0.0.0', () => {
-  console.log(`[✓] Render Port Binding active on 0.0.0.0:${RENDER_PORT}`);
-});
-// -------------------------------------------------------------------------
 
 console.log('====================================================');
 console.log('🟢 YOUPI PG V2 PRODUCTION GATEWAY ONLINE & ACTIVE');
