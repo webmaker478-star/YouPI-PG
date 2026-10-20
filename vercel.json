@@ -1,0 +1,38 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "checkout-portal": {
+      "root": "apps/checkout-portal",
+      "runtime": "node"
+    },
+    "coin-wallet-store": {
+      "root": "apps/coin-wallet-store",
+      "runtime": "node"
+    },
+    "control-center": {
+      "root": "apps/control-center",
+      "runtime": "node"
+    },
+    "gmail-observer": {
+      "root": "apps/gmail-observer",
+      "runtime": "node"
+    },
+    "merchant-admin": {
+      "root": "apps/merchant-admin",
+      "runtime": "node"
+    },
+    "payment-api": {
+      "root": "apps/payment-api",
+      "runtime": "node"
+    },
+    "payment-help": {
+      "root": "apps/payment-help",
+      "runtime": "node"
+    },
+    "sms-observer": {
+      "root": "apps/sms-observer",
+      "runtime": "node"
+    }
+  },
+  "rewrites": []
+}
