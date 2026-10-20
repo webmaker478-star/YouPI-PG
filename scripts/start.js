@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import http from 'node:http'; // <--- Render port binding ke liye add kiya gaya hai
 import { runMigrations } from '../packages/db/src/migrate.js';
 import { startControlCenter } from '../apps/control-center/src/index.js';
 import { resolveRuntimeUrls } from '../packages/common/src/runtime-config.js';
@@ -82,6 +83,20 @@ const cc = await startControlCenter(8090);
 console.log('[3/3] Starting core production gateway services (Pure API & Android Observer)...\n');
 await cc.processManager.startAll();
 
+// -------------------------------------------------------------------------
+// RENDER PORT BINDING FIX: Render requires an open port on 0.0.0.0:[PORT]
+// -------------------------------------------------------------------------
+const RENDER_PORT = process.env.PORT || 10000;
+const renderServer = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('YOUPI PG V2 Production Gateway is Alive & Running!\n');
+});
+
+renderServer.listen(RENDER_PORT, '0.0.0.0', () => {
+  console.log(`[✓] Render Port Binding active on 0.0.0.0:${RENDER_PORT}`);
+});
+// -------------------------------------------------------------------------
+
 console.log('====================================================');
 console.log('🟢 YOUPI PG V2 PRODUCTION GATEWAY ONLINE & ACTIVE');
 console.log('====================================================');
@@ -101,6 +116,9 @@ console.log('Press Ctrl+C to stop all services gracefully.');
 
 const shutdown = async () => {
   console.log('\nStopping all services gracefully...');
+  try {
+    renderServer.close();
+  } catch {}
   if (tunnelProcess && tunnelProcess.pid) {
     try {
       console.log('Terminating Cloudflare Tunnel process...');
