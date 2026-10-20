@@ -32,14 +32,93 @@ console.log('====================================================');
 // ⚡ EARLY RENDER PORT BINDING FIX: Bind to 0.0.0.0:[PORT] immediately so 
 // Render's port scanner detects an open port right away!
 // =========================================================================
-const RENDER_PORT = process.env.PORT || 10000;
+const RENDER_PORT = Number(process.env.PORT || 10000);
+
 const renderServer = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('YOUPI PG V2 Production Gateway is Alive & Running!\n');
+  const pathname = new URL(
+    req.url || '/',
+    'http://localhost'
+  ).pathname;
+
+  // Real Payment API health endpoints
+  if (pathname === '/health' || pathname === '/api/v1/health') {
+    proxyRequest(req, res, 6100);
+    return;
+  }
+
+  // Payment API routes
+  if (
+    pathname.startsWith('/api/') ||
+    pathname.startsWith('/webhooks/') ||
+    pathname.startsWith('/payments/')
+  ) {
+    proxyRequest(req, res, 6100);
+    return;
+  }
+
+  // Checkout Portal
+  if (
+    pathname.startsWith('/checkout') ||
+    pathname.startsWith('/pay/')
+  ) {
+    proxyRequest(req, res, 7000);
+    return;
+  }
+
+  // Default response
+  res.writeHead(200, {
+    'Content-Type': 'application/json; charset=utf-8'
+  });
+
+  res.end(JSON.stringify({
+    status: 'UP',
+    service: 'youpi-pg-gateway',
+    message: 'Gateway is running',
+    endpoints: {
+      health: '/api/v1/health',
+      checkout: '/checkout'
+    }
+  }));
 });
 
-renderServer.listen(Number(RENDER_PORT), '0.0.0.0', () => {
-  console.log(`[✓] Render Port Binding active and listening on 0.0.0.0:${RENDER_PORT}`);
+function proxyRequest(req, res, targetPort) {
+  const options = {
+    hostname: '127.0.0.1',
+    port: targetPort,
+    path: req.url,
+    method: req.method,
+    headers: {
+      ...req.headers,
+      host: `127.0.0.1:${targetPort}`
+    }
+  };
+
+  const upstream = http.request(options, (upstreamRes) => {
+    res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
+    upstreamRes.pipe(res);
+  });
+
+  upstream.on('error', () => {
+    if (!res.headersSent) {
+      res.writeHead(502, {
+        'Content-Type': 'application/json; charset=utf-8'
+      });
+    }
+
+    res.end(JSON.stringify({
+      status: 'ERROR',
+      message: 'Upstream service unavailable',
+      port: targetPort
+    }));
+  });
+
+  req.pipe(upstream);
+}
+
+renderServer.listen(RENDER_PORT, '0.0.0.0', () => {
+  console.log(
+    `[✓] Render reverse proxy listening on 0.0.0.0:${RENDER_PORT}`
+  );
 });
 // =========================================================================
 
