@@ -58,12 +58,18 @@ const renderServer = http.createServer((req, res) => {
 
   // Checkout Portal
   if (
-    pathname.startsWith('/checkout') ||
-    pathname.startsWith('/pay/')
-  ) {
-    proxyRequest(req, res, 7000);
-    return;
-  }
+  pathname === '/checkout' ||
+  pathname.startsWith('/checkout/') ||
+  pathname === '/youpi.js' ||
+  pathname.startsWith('/sdk/') ||
+  pathname.startsWith('/css/') ||
+  pathname.startsWith('/js/') ||
+  pathname.startsWith('/icons/') ||
+  pathname === '/ping'
+) {
+  proxyRequest(req, res, 7000);
+  return;
+}
 
   // Default response
   res.writeHead(200, {
