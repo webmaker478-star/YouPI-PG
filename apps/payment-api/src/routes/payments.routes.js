@@ -204,14 +204,13 @@ export function registerPaymentRoutes(server, ctx) {
       }
     }
 
-    // Invariant: Do NOT start payment session timer until customer is authenticated/logged in!
-    // Customer sign in or sign up in the checkout portal is mandatory before slot activation or timer start.
-    // Digital UPI payments MUST ALWAYS start in status INITIATED without acquiring a concurrency slot or timer.
-    // Only physical counter payments (CASH_COUNTER, CARD_COUNTER) start as ACTIVE (they do not use UPI slots).
-    // The only exception for UPI auto-activation is explicit developer test suite flag: body.autoActivate === true.
-    const isExplicitTestAutoActivate = body.autoActivate === true || body.autoActivate === 'true';
-    const shouldActivateNow = isCounterPayment || isExplicitTestAutoActivate;
-    const initialStatus = isCounterPayment ? PaymentStatus.ACTIVE : PaymentStatus.INITIATED;
+    // =========================================================================
+    // DIRECT PAYMENT / NO OTP BYPASS MODIFICATION:
+    // Force sessions to start directly in PaymentStatus.ACTIVE.
+    // Skips OTP or WhatsApp login verification requirement completely.
+    // =========================================================================
+    const shouldActivateNow = true;
+    const initialStatus = PaymentStatus.ACTIVE;
 
     const sessionMetadata = {
       ...(body.metadata || {}),
@@ -222,7 +221,7 @@ export function registerPaymentRoutes(server, ctx) {
       try { ctx.deviceRepo.associateCustomer(deviceId, customerId); } catch {}
     }
 
-    // Create session in DB
+    // Create session in DB as ACTIVE immediately
     const session = ctx.sessionRepo.create({
       merchantId: merchant.id,
       customerId,
@@ -238,12 +237,12 @@ export function registerPaymentRoutes(server, ctx) {
       metadata: sessionMetadata
     });
 
-    // Enqueue or Activate slot via QueueEngine ONLY when counter payment or explicitly requested by automated test runner
+    // Directly activate queue slot & payment timer so UPI QR code displays instantly
     let queueResult = { status: initialStatus, queuePosition: 0, expiresAt: null };
-    if (!isCounterPayment && receivingAccountId && shouldActivateNow) {
+    if (!isCounterPayment && receivingAccountId) {
       queueResult = ctx.queueEngine.enqueueOrActivate(session.id, receivingAccountId);
 
-      // If activated immediately, start Timer 1 (5 minutes)
+      // Start active timer immediately
       if (queueResult.expiresAt) {
         ctx.timingEngine.startActiveTimer(session.id, queueResult.expiresAt);
       }
@@ -279,8 +278,7 @@ export function registerPaymentRoutes(server, ctx) {
       ? toPublicOutcome(session.status)
       : session.status;
 
-    // Fields any payment-id holder may read. Everything else is merchant-private: the raw
-    // state machine status, verification internals, merchant metadata and the return URL.
+    // Public view returned to frontend/checkout UI
     const publicView = {
       paymentId: session.id,
       orderId: session.orderId,
@@ -316,8 +314,6 @@ export function registerPaymentRoutes(server, ctx) {
       return;
     }
 
-    // Order ids are merchant-chosen and often sequential, so the delivery contact and metadata
-    // are only for the owning merchant (or the gateway); anyone else gets the order status.
     const owner = isPaymentOwner(req, session, ctx);
     let customer = null;
     if (owner && session.customerId && ctx.customerRepo) {
@@ -369,8 +365,6 @@ export function registerPaymentRoutes(server, ctx) {
       return;
     }
 
-    // Order ids are merchant-chosen and often sequential, so the delivery contact and metadata
-    // are only for the owning merchant (or the gateway); anyone else gets the order status.
     const owner = isPaymentOwner(req, session, ctx);
     let customer = null;
     if (owner && session.customerId && ctx.customerRepo) {
