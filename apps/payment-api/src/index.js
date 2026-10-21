@@ -8,7 +8,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '../../..');
 
-// In production, reliably ensure environment variables from .env are loaded if not already provided
+// Ensure environment variables from .env are loaded reliably in production
 if (!process.env.BASE_CHECKOUT_URL && typeof process.loadEnvFile === 'function') {
   try {
     const rootEnv = path.resolve(rootDir, '.env');
@@ -17,6 +17,7 @@ if (!process.env.BASE_CHECKOUT_URL && typeof process.loadEnvFile === 'function')
     }
   } catch {}
 }
+
 import {
   getDatabase,
   ensureDatabaseInitialized,
@@ -31,6 +32,7 @@ import {
   AuditLogRepository,
   DeviceRepository
 } from '@youpi/db';
+
 import {
   QueueEngine,
   TimingEngine,
@@ -39,6 +41,7 @@ import {
   WebhookEngine,
   PaymentVerificationPipeline
 } from '@youpi/core';
+
 import { HttpServer } from './server.js';
 import { authGuard } from './auth-guard.js';
 import { registerPaymentRoutes } from './routes/payments.routes.js';
@@ -55,6 +58,7 @@ export function createPaymentApp(customDb = null, options = {}) {
   ensureDatabaseInitialized(db);
   const { defaultMerchant } = runMigrations(db);
   const isCustom = !!customDb;
+
   const whatsappBerryService = options.whatsappBerryService || (isCustom ? new WhatsAppBerryService({
     sessionId: 'test_berry_session',
     sessionPath: path.resolve(rootDir, 'data/test_berry_auth'),
@@ -115,6 +119,7 @@ export function createPaymentApp(customDb = null, options = {}) {
 
   const server = new HttpServer();
   server.use(authGuard);
+
   let checkoutBaseUrl = process.env.BASE_CHECKOUT_URL || 'http://localhost:7000';
   try {
     const rootEnv = path.resolve(__dirname, '../../../.env');
@@ -130,7 +135,7 @@ export function createPaymentApp(customDb = null, options = {}) {
     }
   } catch {}
 
-  // BULLETPROOF QUEUE PROMOTION HANDLER
+  // Bulletproof Queue Promotion Handler
   function handleSlotFreedAndPromote(receivingAccountId) {
     if (!receivingAccountId) return null;
     const promoted = queueEngine.promoteNext(receivingAccountId);
@@ -150,7 +155,7 @@ export function createPaymentApp(customDb = null, options = {}) {
     return promoted;
   }
 
-  // When a payment succeeds, fails, expires, or cancels: dispatch webhook & promote next queued customer
+  // Event Listeners for Payment States
   eventEmitter.on('PAYMENT.SUCCESS', (data) => {
     const session = sessionRepo.findById(data.paymentId);
     if (session) {
@@ -185,9 +190,7 @@ export function createPaymentApp(customDb = null, options = {}) {
   eventEmitter.on('PAYMENT.EXPIRED', (data) => {
     const session = sessionRepo.findById(data.paymentId);
     if (session) {
-      server.broadcastSse(session.id, 'status_change', {
-        status: PaymentStatus.EXPIRED
-      });
+      server.broadcastSse(session.id, 'status_change', { status: PaymentStatus.EXPIRED });
       webhookEngine.dispatch('EXPIRED', session).catch(() => {});
       handleSlotFreedAndPromote(session.receivingAccountId);
     }
@@ -196,9 +199,7 @@ export function createPaymentApp(customDb = null, options = {}) {
   eventEmitter.on('PAYMENT.CANCELLED', (data) => {
     const session = sessionRepo.findById(data.paymentId);
     if (session) {
-      server.broadcastSse(session.id, 'status_change', {
-        status: PaymentStatus.CANCELLED
-      });
+      server.broadcastSse(session.id, 'status_change', { status: PaymentStatus.CANCELLED });
       webhookEngine.dispatch('CANCELLED', session).catch(() => {});
       handleSlotFreedAndPromote(session.receivingAccountId);
     }
@@ -215,66 +216,29 @@ export function createPaymentApp(customDb = null, options = {}) {
         blockedNotice: {
           title: 'FRAUDULENT ACTIVITY DETECTED',
           subtitle: 'Payment Session Terminated & Account Suspended',
-          message: 'Our automated verification engine detected fraudulent payment activity associated with this account. Access has been immediately suspended while our security operations team investigates the issue.',
+          message: 'Our automated verification engine detected fraudulent payment activity associated with this account.',
           investigating: true
         }
-      });
-      server.broadcastSse(data.sessionId, 'account_blocked', {
-        status: 'BLOCKED',
-        isBanned: true,
-        fraudDetected: true,
-        orderId: data.orderId,
-        reason: data.reason || 'FRAUDULENT_PAYMENT_INJECTION'
       });
     }
   });
 
-  // Continuous 1-second background queue sync and auto-expiry daemon
+  // Background Daemons & Services
   const queueSyncDaemon = setInterval(() => {
     try {
       const nowIso = new Date().toISOString();
-
-      const expiredActive = db.query(`
-        SELECT id, receiving_account_id FROM payment_sessions
-        WHERE status = 'ACTIVE' AND expires_at <= ?
-      `, [nowIso]);
-
+      const expiredActive = db.query(`SELECT id, receiving_account_id FROM payment_sessions WHERE status = 'ACTIVE' AND expires_at <= ?`, [nowIso]);
       for (const row of expiredActive) {
         sessionRepo.transitionToTerminal(row.id, PaymentStatus.EXPIRED);
         server.broadcastSse(row.id, 'status_change', { status: PaymentStatus.EXPIRED });
         handleSlotFreedAndPromote(row.receiving_account_id);
       }
-
-      const failedProc = db.query(`
-        SELECT id, receiving_account_id FROM payment_sessions
-        WHERE status = 'PROCESSING' AND processing_expires_at <= ?
-      `, [nowIso]);
-
-      for (const row of failedProc) {
-        sessionRepo.transitionToTerminal(row.id, PaymentStatus.FAILED);
-        server.broadcastSse(row.id, 'status_change', { status: PaymentStatus.FAILED });
-        handleSlotFreedAndPromote(row.receiving_account_id);
-      }
-
-      const vacantAccounts = db.query(`
-        SELECT id FROM payment_receiving_accounts
-        WHERE is_active = 1 AND (is_slot_busy = 0 OR current_active_session_id IS NULL)
-      `);
-
-      for (const acc of vacantAccounts) {
-        handleSlotFreedAndPromote(acc.id);
-      }
     } catch {}
   }, 1000);
-
   if (queueSyncDaemon.unref) queueSyncDaemon.unref();
 
   const observerPollerService = new ObserverPollerService({
-    db,
-    sessionRepo,
-    obsRepo,
-    attributionEngine,
-    eventEmitter,
+    db, sessionRepo, obsRepo, attributionEngine, eventEmitter,
     pollIntervalMs: Number(process.env.OBSERVER_POLL_INTERVAL_MS || 1500),
     minSweepCooldownMs: Number(process.env.OBSERVER_SWEEP_COOLDOWN_MS || 2000),
     smsPort: Number(process.env.SMS_OBSERVER_PORT || 6002),
@@ -283,6 +247,7 @@ export function createPaymentApp(customDb = null, options = {}) {
 
   const recoveryStats = recoveryEngine.recover();
 
+  // Health check routes
   const healthHandler = (req, res) => {
     HttpServer.json(res, 200, {
       status: 'UP',
@@ -295,12 +260,25 @@ export function createPaymentApp(customDb = null, options = {}) {
   server.get('/api/v1/health', healthHandler);
 
   // =========================================================================
-  // MERCHANT ADMIN DASHBOARD ROUTE (Serves admin.html UI)
+  // MERCHANT ADMIN DASHBOARD ROUTE (Serves admin.html UI securely)
   // =========================================================================
-  server.get('/admin', async (req, res) => {
+  const serveAdminDashboard = async (req, res) => {
     try {
-      const adminHtmlPath = path.resolve(rootDir, 'apps/merchant-admin/src/views/admin.html');
-      if (fs.existsSync(adminHtmlPath)) {
+      const possiblePaths = [
+        path.resolve(rootDir, 'apps/merchant-admin/src/views/admin.html'),
+        path.resolve(__dirname, '../../merchant-admin/src/views/admin.html'),
+        path.resolve(rootDir, 'merchant-admin/src/views/admin.html')
+      ];
+
+      let adminHtmlPath = null;
+      for (const p of possiblePaths) {
+        if (fs.existsSync(p)) {
+          adminHtmlPath = p;
+          break;
+        }
+      }
+
+      if (adminHtmlPath) {
         let html = fs.readFileSync(adminHtmlPath, 'utf8');
         const apiBaseUrl = process.env.PUBLIC_API_URL || 'https://youpi-pg-4n2w.onrender.com';
         html = html.replace(/\{\{API_BASE_URL\}\}/g, apiBaseUrl)
@@ -310,51 +288,29 @@ export function createPaymentApp(customDb = null, options = {}) {
         res.end(html);
       } else {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
-        res.end('Admin HTML view file not found on server.');
+        res.end('Admin dashboard view file not found on server.');
       }
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'text/plain' });
-      res.end(`Admin Server Error: ${err.message}`);
+      res.end(`Admin Panel Error: ${err.message}`);
     }
-  });
+  };
+
+  server.get('/admin', serveAdminDashboard);
+  server.get('/admin.html', serveAdminDashboard);
 
   const pipeline = new PaymentVerificationPipeline({
-    db,
-    sessionRepo,
-    obsRepo,
-    customerRepo,
-    attributionEngine,
-    auditRepo,
-    merchantRepo,
-    server,
-    eventEmitter
+    db, sessionRepo, obsRepo, customerRepo, attributionEngine, auditRepo, merchantRepo, server, eventEmitter
   });
 
   const context = {
-    db,
-    merchantRepo,
-    accountRepo,
-    customerRepo,
-    customerSessionRepo,
-    sessionRepo,
-    deviceRepo,
-    obsRepo,
-    ticketRepo,
-    auditRepo,
-    queueEngine,
-    timingEngine,
-    attributionEngine,
-    pipeline,
-    recoveryEngine,
-    eventEmitter,
-    defaultMerchant,
-    checkoutBaseUrl,
-    whatsappBerryService,
-    webhookEngine,
-    observerPollerService,
-    otpCooldownMs: options.otpCooldownMs
+    db, merchantRepo, accountRepo, customerRepo, customerSessionRepo, sessionRepo, deviceRepo,
+    obsRepo, ticketRepo, auditRepo, queueEngine, timingEngine, attributionEngine, pipeline,
+    recoveryEngine, eventEmitter, defaultMerchant, checkoutBaseUrl, whatsappBerryService,
+    webhookEngine, observerPollerService, otpCooldownMs: options.otpCooldownMs
   };
 
+  // Register Core System Routes
   registerPaymentRoutes(server, context);
   registerCheckoutRoutes(server, context);
   registerPollerRoutes(server, context);
@@ -362,17 +318,12 @@ export function createPaymentApp(customDb = null, options = {}) {
   registerCustomerRoutes(server, context);
   registerDeviceRoutes(server, context);
 
-  // WhatsApp 8-Digit Pairing Code Endpoints
+  // WhatsApp Pairing Endpoints
   server.post('/api/v1/whatsapp/pair', async (req, res) => {
     try {
       const phoneNumber = req.body?.phoneNumber || '7852846992';
       const result = await whatsappBerryService.requestPairingCode(phoneNumber);
-      HttpServer.json(res, 200, {
-        success: true,
-        message: 'Pairing code generated successfully',
-        pairingCode: result.pairingCode,
-        phoneNumber: result.phoneNumber
-      });
+      HttpServer.json(res, 200, { success: true, pairingCode: result.pairingCode, phoneNumber: result.phoneNumber });
     } catch (err) {
       HttpServer.json(res, 500, { success: false, error: err.message });
     }
@@ -382,11 +333,7 @@ export function createPaymentApp(customDb = null, options = {}) {
     try {
       const phoneNumber = req.body?.phoneNumber || '7852846992';
       const result = await whatsappBerryService.requestPairingCode(phoneNumber);
-      HttpServer.json(res, 200, {
-        success: true,
-        pairingCode: result.pairingCode,
-        phoneNumber: result.phoneNumber
-      });
+      HttpServer.json(res, 200, { success: true, pairingCode: result.pairingCode, phoneNumber: result.phoneNumber });
     } catch (err) {
       HttpServer.json(res, 500, { success: false, error: err.message });
     }
@@ -396,17 +343,10 @@ export function createPaymentApp(customDb = null, options = {}) {
     clearInterval(queueSyncDaemon);
     observerPollerService.destroy();
     timingEngine.destroy();
-    if (typeof attributionEngine.destroy === 'function') {
-      attributionEngine.destroy();
-    }
+    if (typeof attributionEngine.destroy === 'function') attributionEngine.destroy();
   }
 
-  return {
-    server,
-    context,
-    destroy,
-    rawServer: server.createServer()
-  };
+  return { server, context, destroy, rawServer: server.createServer() };
 }
 
 export function startServer(port = null, customDb = null) {
@@ -420,10 +360,7 @@ export function startServer(port = null, customDb = null) {
       resolve({
         app,
         port: finalPort,
-        close: () => new Promise(cb => {
-          app.destroy();
-          instance.close(cb);
-        })
+        close: () => new Promise(cb => { app.destroy(); instance.close(cb); })
       });
     });
   });
