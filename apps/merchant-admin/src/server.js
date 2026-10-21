@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getDatabase, MerchantRepository, SupportTicketRepository } from '@youpi/db';
 import { getAdminToken, safeEqual } from '@youpi/common';
+import { resolveApiTarget, proxyToPaymentApi } from './api-target.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -153,34 +154,15 @@ export class AdminServer {
 
       // Transparent API Proxy: /api/* -> Payment Core REST API
       if (pathname.startsWith('/api/')) {
-        const targetPort = Number(process.env.PAYMENT_API_PORT || 6100);
         const defaultMerchant = this.merchantRepo.getDefault ? this.merchantRepo.getDefault() : (this.merchantRepo.findById('00000000-0000-0000-0000-000000000001') || this.merchantRepo.findAll()[0]);
         const defaultMerchantId = defaultMerchant?.id || '00000000-0000-0000-0000-000000000001';
-        const proxyReq = http.request({
-          hostname: '127.0.0.1',
-          port: targetPort,
-          path: req.url,
-          method: req.method,
-          headers: {
-            ...req.headers,
-            'x-merchant-id': req.headers['x-merchant-id'] || defaultMerchantId,
-            host: `localhost:${targetPort}`,
-            'x-forwarded-host': req.headers.host || '',
-            'x-forwarded-proto': req.headers['x-forwarded-proto'] || 'http'
-          }
-        }, (proxyRes) => {
-          res.writeHead(proxyRes.statusCode, proxyRes.headers);
-          proxyRes.pipe(res);
-        });
 
-        proxyReq.on('error', (err) => {
-          if (!res.headersSent) {
-            res.writeHead(502, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Gateway API unavailable', details: err.message }));
-          }
+        // Local (same machine) or remote (BASE_PAYMENT_API_URL) Payment API.
+        proxyToPaymentApi(req, res, resolveApiTarget(), {
+          'x-merchant-id': req.headers['x-merchant-id'] || defaultMerchantId,
+          'x-forwarded-host': req.headers.host || '',
+          'x-forwarded-proto': req.headers['x-forwarded-proto'] || 'http'
         });
-
-        req.pipe(proxyReq);
         return;
       }
 
