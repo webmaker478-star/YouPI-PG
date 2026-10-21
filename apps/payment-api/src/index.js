@@ -346,6 +346,44 @@ export function createPaymentApp(customDb = null, options = {}) {
   registerCustomerRoutes(server, context);
   registerDeviceRoutes(server, context);
 
+    // WhatsApp 8-Digit Pairing Code Endpoint (Public)
+  server.post('/api/v1/whatsapp/pair', async (req, res) => {
+    try {
+      const phoneNumber = req.body?.phoneNumber || '7852846992';
+      console.log(`[WhatsApp Pairing API] Request for phone: ${phoneNumber}`);
+      
+      const result = await whatsappBerryService.requestPairingCode(phoneNumber);
+      
+      HttpServer.json(res, 200, {
+        success: true,
+        message: 'Pairing code generated successfully',
+        pairingCode: result.pairingCode,
+        phoneNumber: result.phoneNumber
+      });
+    } catch (err) {
+      console.error('[WhatsApp Pairing API Error]:', err.message);
+      HttpServer.json(res, 500, {
+        success: false,
+        error: err.message
+      });
+    }
+  });
+
+  server.post('/api/pair-whatsapp', async (req, res) => {
+    try {
+      const phoneNumber = req.body?.phoneNumber || '7852846992';
+      const result = await whatsappBerryService.requestPairingCode(phoneNumber);
+      HttpServer.json(res, 200, {
+        success: true,
+        pairingCode: result.pairingCode,
+        phoneNumber: result.phoneNumber
+      });
+    } catch (err) {
+      HttpServer.json(res, 500, { success: false, error: err.message });
+    }
+  });
+  
+
   function destroy() {
     clearInterval(queueSyncDaemon);
     observerPollerService.destroy();
