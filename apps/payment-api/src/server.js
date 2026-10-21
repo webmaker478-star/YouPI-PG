@@ -206,6 +206,14 @@ export class HttpServer {
         }
       } catch (err) {
         console.error(`Guard Error [${method} ${pathname}]:`, err);
+        if (process.env.YOUPI_DEBUG_ERRORS === 'true') {
+          HttpServer.json(res, 500, {
+            error: 'Internal Server Error',
+            debug: `GUARD ${err && err.name}: ${err && err.message}`.slice(0, 300),
+            where: String((err && err.stack) || '').split('\n').slice(1, 3).map(s => s.trim()).join(' | ').slice(0, 400)
+          });
+          return;
+        }
         HttpServer.json(res, 500, { error: 'Internal Server Error' });
         return;
       }
@@ -226,6 +234,16 @@ export class HttpServer {
             } catch (err) {
               // Log the detail server-side; never echo stack/SQL text to an anonymous caller.
               console.error(`Route Error [${method} ${pathname}]:`, err);
+              // TEMPORARY diagnostics: only when YOUPI_DEBUG_ERRORS=true is set.
+              // Turn it off again once the problem is found - it exposes internals.
+              if (process.env.YOUPI_DEBUG_ERRORS === 'true') {
+                HttpServer.json(res, 500, {
+                  error: 'Internal Server Error',
+                  debug: `${err && err.name}: ${err && err.message}`.slice(0, 300),
+                  where: String((err && err.stack) || '').split('\n').slice(1, 3).map(s => s.trim()).join(' | ').slice(0, 400)
+                });
+                return;
+              }
               HttpServer.json(res, 500, { error: 'Internal Server Error' });
             }
             return;
