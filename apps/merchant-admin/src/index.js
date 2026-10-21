@@ -4,7 +4,8 @@ import { AdminServer } from './server.js';
 import { getDatabase, runMigrations, ensureDatabaseInitialized } from '@youpi/db';
 
 export function startAdminServer(port = null, options = {}) {
-  const finalPort = port || Number(process.env.MERCHANT_ADMIN_PORT || 6001);
+  // 1. Yahan process.env.PORT ko sabse pehle priority dein
+  const finalPort = port || Number(process.env.PORT || process.env.MERCHANT_ADMIN_PORT || 6001);
   const db = options.db || getDatabase();
   ensureDatabaseInitialized(db);
   runMigrations(db);
@@ -12,14 +13,12 @@ export function startAdminServer(port = null, options = {}) {
   const adminServer = new AdminServer({ db, ...options });
   const rawServer = adminServer.createServer();
 
-  // Bind to loopback unless explicitly overridden. These services hold admin/observer
-  // credentials and are reached through a local Cloudflare Tunnel, so exposing every
-  // network interface is unnecessary.
-  const bindHost = process.env.YOUPI_BIND_HOST || '127.0.0.1';
+  // 2. Render ke liye '0.0.0.0' bind host use karna zaroori hai taaki external traffic connect ho sake
+  const bindHost = process.env.YOUPI_BIND_HOST || (process.env.PORT ? '0.0.0.0' : '127.0.0.1');
 
   return new Promise(resolve => {
     const instance = rawServer.listen(finalPort, bindHost, () => {
-      console.log(`[Merchant Admin] Server listening on port ${finalPort}`);
+      console.log(`[Merchant Admin] Server listening on port ${finalPort} on host ${bindHost}`);
       resolve({
         port: finalPort,
         close: () => new Promise(cb => instance.close(cb))
