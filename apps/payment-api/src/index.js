@@ -229,13 +229,11 @@ export function createPaymentApp(customDb = null, options = {}) {
     }
   });
 
-
   // Continuous 1-second background queue sync and auto-expiry daemon
   const queueSyncDaemon = setInterval(() => {
     try {
       const nowIso = new Date().toISOString();
 
-      // Sweep expired ACTIVE sessions
       const expiredActive = db.query(`
         SELECT id, receiving_account_id FROM payment_sessions
         WHERE status = 'ACTIVE' AND expires_at <= ?
@@ -247,7 +245,6 @@ export function createPaymentApp(customDb = null, options = {}) {
         handleSlotFreedAndPromote(row.receiving_account_id);
       }
 
-      // Sweep failed PROCESSING sessions
       const failedProc = db.query(`
         SELECT id, receiving_account_id FROM payment_sessions
         WHERE status = 'PROCESSING' AND processing_expires_at <= ?
@@ -259,7 +256,6 @@ export function createPaymentApp(customDb = null, options = {}) {
         handleSlotFreedAndPromote(row.receiving_account_id);
       }
 
-      // Scan for vacant receiving accounts that have waiting queued sessions
       const vacantAccounts = db.query(`
         SELECT id FROM payment_receiving_accounts
         WHERE is_active = 1 AND (is_slot_busy = 0 OR current_active_session_id IS NULL)
@@ -273,8 +269,6 @@ export function createPaymentApp(customDb = null, options = {}) {
 
   if (queueSyncDaemon.unref) queueSyncDaemon.unref();
 
-  // Consolidated, Coordinated Observer Polling & Verification Daemon
-  // Eliminates duplicate HTTP sweeps, enforces 1.5s-2s cooldown, and prevents SQLite write contention
   const observerPollerService = new ObserverPollerService({
     db,
     sessionRepo,
@@ -287,10 +281,8 @@ export function createPaymentApp(customDb = null, options = {}) {
     gmailPort: Number(process.env.GMAIL_OBSERVER_PORT || 6003)
   });
 
-  // Execute crash recovery on boot
   const recoveryStats = recoveryEngine.recover();
 
-  // Health check routes
   const healthHandler = (req, res) => {
     HttpServer.json(res, 200, {
       status: 'UP',
@@ -301,6 +293,30 @@ export function createPaymentApp(customDb = null, options = {}) {
   };
   server.get('/health', healthHandler);
   server.get('/api/v1/health', healthHandler);
+
+  // =========================================================================
+  // MERCHANT ADMIN DASHBOARD ROUTE (Serves admin.html UI)
+  // =========================================================================
+  server.get('/admin', async (req, res) => {
+    try {
+      const adminHtmlPath = path.resolve(rootDir, 'apps/merchant-admin/src/views/admin.html');
+      if (fs.existsSync(adminHtmlPath)) {
+        let html = fs.readFileSync(adminHtmlPath, 'utf8');
+        const apiBaseUrl = process.env.PUBLIC_API_URL || 'https://youpi-pg-4n2w.onrender.com';
+        html = html.replace(/\{\{API_BASE_URL\}\}/g, apiBaseUrl)
+                   .replace(/\{\{APP_NAME\}\}/g, 'YouPI PG Admin');
+
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(html);
+      } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Admin HTML view file not found on server.');
+      }
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end(`Admin Server Error: ${err.message}`);
+    }
+  });
 
   const pipeline = new PaymentVerificationPipeline({
     db,
@@ -346,14 +362,11 @@ export function createPaymentApp(customDb = null, options = {}) {
   registerCustomerRoutes(server, context);
   registerDeviceRoutes(server, context);
 
-    // WhatsApp 8-Digit Pairing Code Endpoint (Public)
+  // WhatsApp 8-Digit Pairing Code Endpoints
   server.post('/api/v1/whatsapp/pair', async (req, res) => {
     try {
       const phoneNumber = req.body?.phoneNumber || '7852846992';
-      console.log(`[WhatsApp Pairing API] Request for phone: ${phoneNumber}`);
-      
       const result = await whatsappBerryService.requestPairingCode(phoneNumber);
-      
       HttpServer.json(res, 200, {
         success: true,
         message: 'Pairing code generated successfully',
@@ -361,11 +374,7 @@ export function createPaymentApp(customDb = null, options = {}) {
         phoneNumber: result.phoneNumber
       });
     } catch (err) {
-      console.error('[WhatsApp Pairing API Error]:', err.message);
-      HttpServer.json(res, 500, {
-        success: false,
-        error: err.message
-      });
+      HttpServer.json(res, 500, { success: false, error: err.message });
     }
   });
 
@@ -382,7 +391,6 @@ export function createPaymentApp(customDb = null, options = {}) {
       HttpServer.json(res, 500, { success: false, error: err.message });
     }
   });
-  
 
   function destroy() {
     clearInterval(queueSyncDaemon);
@@ -406,7 +414,6 @@ export function startServer(port = null, customDb = null) {
   const app = createPaymentApp(customDb);
 
   return new Promise(resolve => {
-    // Loopback by default; reach this service via the local Cloudflare Tunnel, not 0.0.0.0.
     const bindHost = process.env.YOUPI_BIND_HOST || '127.0.0.1';
     const instance = app.rawServer.listen(finalPort, bindHost, () => {
       console.log(`[Payment API] Server listening on port ${finalPort}`);
@@ -422,7 +429,6 @@ export function startServer(port = null, customDb = null) {
   });
 }
 
-// Auto-run if executed directly as main script
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   startServer();
 }
